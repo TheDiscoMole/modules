@@ -10,8 +10,8 @@ dims: number of model dimensions
 in_channels: number of input channels
 out_channels: number of output channels
 kernel_size: size of the convolutional kernel                                   (optional|default: 5)
-stride: convolutional stride length                                             (optional|default: 1)
 padding: input padding scheme                                                   (optional|default: "same")
+stride: convolutional stride length                                             (optional|default: 1)
 """
 def ConvNd (dims, in_channels, out_channels,
     kernel_size=5,
@@ -38,18 +38,21 @@ class ConvNdFeatureEncoder (torch.nn.Module):
     n-Step wise convolutional feature dimension encoder.
 
     dims: number of model dimensions
-    in_channels: number of input channels                                       (optional|default: 3)
-    out_channels: number of output channels                                     (optional|default: 64)
-    layers: number of layers to achieve out_channel size                        (optional|default: 64)
+    in_channels: number of input channels
+    out_channels: number of output channels
+    activation: convolutional activation function                               (optional|default: GELU)
+    dropout: dropout rate                                                       (optional|default: 0.1)
     kernel_size: size of the convolutional kernel                               (optional|default: 5)
-    stride: convolutional stride length                                         (optional|default: 1)
+    layers: number of layers to achieve out_channel size                        (optional|default: 64)
     padding: input padding scheme                                               (optional|default: "same")
+    stride: convolutional stride length                                         (optional|default: 1)
     """
     def __init__ (self, dims, in_channels, out_channels,
         activation=torch.nn.GELU,
+        dropout=1e-1,
         kernel_size=5,
-        padding="same",
         layers=1,
+        padding="same",
         stride=1
     ):
         super(ConvNdFeatureEncoder, self).__init__()
@@ -61,19 +64,21 @@ class ConvNdFeatureEncoder (torch.nn.Module):
         self.reshape_convolution = ReshapeSimple("b x ... c -> b c ... x")
 
         # modules
-        convolutions = []
-        channels = numpy.linspace(start=in_channels, stop=out_channels, num=layers+1, dtype=int)
-
-        for in_channels,out_channels in zip(channels,channels[1:]):
-            convolutions.append(ConvNd(dims,
+        convolutions = numpy.linspace(start=in_channels, stop=out_channels, num=layers+1, dtype=int)
+        convolutions = [
+            ConvNd(
+                dims=dims,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
                 stride=stride,
-                padding=padding))
-            if activation is not None: convolutions.append(activation())
+                padding=padding)
+            for in_channels,out_channels in zip(convolutions,convolutions[1:])]
 
-        self.convolution = torch.nn.Sequential(*convolutions)
+        convolutions = zip([torch.nn.Dropout(dropout)] * len(convolutions), convolutions) if activation is None else zip([torch.nn.Dropout(dropout)] * len(convolutions), convolutions, [activation()] * len(convolutions))
+        convolutions = [layer for layers in convolutions for layer in layers]
+
+        self.convolutions = torch.nn.Sequential(*convolutions[1:])
 
     def forward (self, input):
         # validation
@@ -81,7 +86,7 @@ class ConvNdFeatureEncoder (torch.nn.Module):
 
         # convolution
         convolution = self.reshape_convolution(input)
-        convolution = self.convolution(convolution)
+        convolution = self.convolutions(convolution)
         convolution = self.reshape_convolution.inverse(convolution)
 
         return convolution
