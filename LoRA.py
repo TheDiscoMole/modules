@@ -6,6 +6,14 @@ class Layer ():
         self.tasks = {}
 
 class ConvNdTask (torch.nn.Module):
+    """
+    ConvNd module for LoRA tasks
+
+    in_channels: number of input channels
+    out_channels: number of output channels
+    kernel_size: size of the convolutional kernel                               (optional|default: 5)
+    rank: LoRA rank                                                             (optional|default: 16)
+    """
     def __init__ (self, in_channels, out_channels,
         kernel_size=5,
         rank=16,
@@ -44,6 +52,13 @@ class ConvNdTask (torch.nn.Module):
         self.B = torch.nn.parameters.Parameter(torch.zeros(self.rank * self.kernel_size, self.out_channels * self.kernel_size))
 
 class EmbeddingTask (torch.nn.Module):
+    """
+    Embedding module for LoRA tasks
+
+    length: length of the embedding
+    features: number of embedding features
+    rank: LoRA rank                                                             (optional|default: 16)
+    """
     def __init__ (self, length, features,
         rank=16
     ):
@@ -73,6 +88,13 @@ class EmbeddingTask (torch.nn.Module):
         self.B = torch.nn.parameters.Parameter(torch.zeros(self.rank, self.features))
 
 class LinearTask (torch.nn.Module):
+    """
+    Embedding module for LoRA tasks
+
+    in_features: number of input features
+    out_features: number of output features
+    rank: LoRA rank                                                             (optional|default: 16)
+    """
     def __init__ (self, in_features, out_features,
         rank=16
     ):
