@@ -1,38 +1,40 @@
+import math
 import torch
 
-class Layer ():
-    def __init__ (self):
-        # modules
-        self.tasks = {}
+from . import convolution
 
-class ConvNdTask (torch.nn.Module):
+class ConvNd (torch.nn.Module):
     """
     ConvNd module for LoRA tasks
 
+    dims: number of input dimensions
     in_channels: number of input channels
     out_channels: number of output channels
     kernel_size: size of the convolutional kernel                               (optional|default: 5)
     rank: LoRA rank                                                             (optional|default: 16)
+    stride: convolutional stride length                                         (optional|default: 1)
     """
-    def __init__ (self, in_channels, out_channels,
+    def __init__ (self, dims, in_channels, out_channels,
         kernel_size=5,
+        padding="same",
         rank=16,
-        **kwargs
+        stride=1
     ):
         torch.nn.Module.__init__(self)
 
         # validation
-        assert (rank > 0) and (rank < min(in_channels, out_channels)), "rank must be between 0 and smallest dimension"
+        assert rank < min(in_channels, out_channels), "rank must be small"
 
         # configs
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.rank = rank
+        self.kernel_size = [kernel_size] * dims
+        self.padding = padding
+        self.stride = stride
 
         # parameters
-        self.A = torch.nn.parameters.Parameter(torch.zeros(in_channels * kernel_size, rank * kernel_size))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(rank * kernel_size, out_channels * kernel_size))
+        self.A = torch.nn.Parameter(torch.zeros(*self.kernel_size, self.out_channels, rank))
+        self.B = torch.nn.Parameter(torch.zeros(*self.kernel_size, rank, self.in_channels))
 
         # modules
         match dims:
@@ -42,39 +44,35 @@ class ConvNdTask (torch.nn.Module):
 
     def forward (self, input):
         # convolution
-        kernel = torch.matmul(self.A, self.B)
-        convolution = self.convolution(input, kernel)
+        kernel = torch.matmul(self.A, self.B).view(self.out_channels, self.in_channels, *self.kernel_size)
+        convolution = self.convolution(input, kernel, padding=self.padding, stride=self.stride)
 
         return convolution
 
-    def reset_parameters (self):
-        self.A = torch.nn.parameters.Parameter(torch.zeros(self.in_channels * self.kernel_size, self.rank * self.kernel_size))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(self.rank * self.kernel_size, self.out_channels * self.kernel_size))
-
-class EmbeddingTask (torch.nn.Module):
+class Embedding (torch.nn.Module):
     """
     Embedding module for LoRA tasks
 
-    length: length of the embedding
-    features: number of embedding features
+    num_embeddings: length of the embedding
+    embedding_dim: number of embedding features
     rank: LoRA rank                                                             (optional|default: 16)
     """
-    def __init__ (self, length, features,
+    def __init__ (self, num_embeddings, embedding_dim,
         rank=16
     ):
         torch.nn.Module.__init__(self)
 
         # validation
-        assert (rank > 0) and (rank < min(length, features)), "rank must be between 0 and smallest dimension"
+        assert rank < min(length, features), "rank must be less than smallest dimension"
 
         # configs
-        self.length = length
-        self.features = features
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
         self.rank = rank
 
         # parameters
-        self.A = torch.nn.parameters.Parameter(torch.zeros(length, rank))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(rank, features))
+        self.A = torch.nn.Parameter(torch.zeros(num_embeddings, rank))
+        self.B = torch.nn.Parameter(torch.zeros(rank, embedding_dim))
 
     def forward (self, idx):
         # embedding
@@ -83,13 +81,9 @@ class EmbeddingTask (torch.nn.Module):
 
         return embedding
 
-    def reset_parameters (self):
-        self.A = torch.nn.parameters.Parameter(torch.zeros(self.length, self.rank))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(self.rank, self.features))
-
-class LinearTask (torch.nn.Module):
+class Linear (torch.nn.Module):
     """
-    Embedding module for LoRA tasks
+    Linear module for LoRA tasks
 
     in_features: number of input features
     out_features: number of output features
@@ -101,7 +95,7 @@ class LinearTask (torch.nn.Module):
         torch.nn.Module.__init__(self)
 
         # validation
-        assert (rank > 0) and (rank < min(in_features, out_features)), "rank must be between 0 and smallest dimension"
+        assert rank < min(in_features, out_features), "rank must be less than smallest dimension"
 
         # configs
         self.in_features = in_features
@@ -109,46 +103,130 @@ class LinearTask (torch.nn.Module):
         self.rank = rank
 
         # parameters
-        self.A = torch.nn.parameters.Parameter(torch.zeros(in_features, rank))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(rank, out_features))
+        self.A = torch.nn.Parameter(torch.zeros(in_features, rank))
+        self.B = torch.nn.Parameter(torch.zeros(rank, out_features))
 
     def forward (self, input):
         # linear
         weight = torch.matmul(self.A, self.B)
-        linear = torch.nn.functional(input, weight)
+        linear = torch.nn.functional.linear(input, weight)
 
         return linear
 
-    def reset_parameters (self):
-        self.A = torch.nn.parameters.Parameter(torch.zeros(self.in_features, self.rank))
-        self.B = torch.nn.parameters.Parameter(torch.zeros(self.rank, self.out_features))
+class LoRALayer (torch.nn.Module):
+    """
+    LoRA layer wrapper
 
-def reset_parameters (model, task):
-    for module in model.modules():
-        if isinstance(module, Layer):
-            module.tasks[task].reset_parameters()
+    model: lora model reference
+    module: module to lora wrap
+    new_task: lambda to generate new task
+    """
+    def __init__ (self, model, module, new_task):
+        torch.nn.Module.__init__(self)
 
-def parameters (model, task):
-    for module in model.modules():
-        if isinstance(module, Layer):
-            yield module.tasks[task].parameters()
+        # task
+        self.task = lambda: model.task
+        self.tasks = {}
+        self.new_task = new_task
 
-def train (model, task, mode=True):
-    for module in model.modules():
-        if isinstance(module, Layer):
-            module.tasks[task].train(mode=mode)
+        # modules
+        self.module = module
 
-def state_dict (model, task, prefix=""):
-    dict = {**state_dict(child, task, prefix=f"{prefix}.{name}") for name,child in model.named_children()}
+    def forward (self, *inputs, **kwargs):
+        # output
+        output = self.module(*inputs, **kwargs)
+        output = output if self.task() is None else output + self.tasks[self.task()](*inputs, **kwargs)
 
-    if isinstance(model, Layer):
-        dict = {**dict, **module.tasks[task].state_dict(prefix=f"{prefix}.{task}")}
+        return output
 
-    return dict
+    def add_task (self, task):
+        self.tasks[task] = self.new_task(self.module)
 
-def load_state_dict (model, task, state_dict, prefix=""):
-    for name,child in model.named_children():
-        load_state_dict(child, task, prefix=f"{prefix}.{name}")
+    def remove_task (self, task):
+        del self.tasks[task]
 
-    if isinstance(model, Layer):
-        module.tasks[task]._load_from_state_dict(state_dict=state_dict, prefix=f"{prefix}.{task}", local_metadata={}, strict=False, missing_keys=[], unexpected_keys=[], error_msgs=[])
+    def parameters (self, task=None):
+        yield self.module.parameters() if task is None else self.tasks[task].parameters()
+
+    def train (self, task=None, mode=True):
+        self.module.train(mode=mode) if task is None else self.tasks[task].train(mode=mode)
+
+class LoRAModel (torch.nn.Module):
+    """
+    LoRA model wrapper
+
+    model: base model
+    rank: function to calculate layer rank                                      (optional|default: sqrt of smallest dimension)
+    """
+    def __init__ (self, model,
+        rank=lambda *features: int(math.sqrt(min(*features))),
+        **kwargs
+    ):
+        torch.nn.Module.__init__(self)
+
+        # compile
+        def compile (model):
+            for name, module in model.named_children():
+                compile(module)
+
+                if isinstance(module, convolution.ConvNd):
+                    new_task = lambda module: ConvNd(dims=module.dims, in_channels=module.in_channels, out_channels=module.out_channels, kernel_size=module.kernel_size, padding=module.padding, rank=rank(module.in_channels, module.out_channels), stride=module.stride)
+                    module = LoRALayer(self, module, new_task)
+                elif isinstance(module, torch.nn.Embedding):
+                    new_task = lambda module: Embedding(num_embeddings=module.num_embeddings, embedding_dim=module.embedding_dim, rank=rank(module.num_embeddings, module.embedding_dim))
+                    module = LoRALayer(self, module, new_task)
+                elif isinstance(module, torch.nn.Linear):
+                    new_task = lambda module: Linear(in_features=module.in_features, out_features=module.out_features, rank=rank(module.in_features, module.out_features))
+                    module = LoRALayer(self, module, new_task)
+                else: continue
+
+                setattr(model, name, module)
+        compile(model)
+
+        # model
+        self.model = model
+
+    def forward (self, *inputs, task=None, **kwargs):
+        # output
+        self.task = task
+        output = self.model(*inputs, **kwargs)
+        self.task = None
+
+        return output
+
+    def add_task (self, task):
+        for module in self.modules():
+            if isinstance(module, LoRALayer): module.add_task(task)
+
+    def remove_task (self, task):
+        for module in self.modules():
+            if isinstance(module, LoRALayer): module.remove_task(task)
+
+    def parameters (self, task=None):
+        for module in self.modules():
+            if isinstance(module, LoRALayer): yield module.parameters(task=task)
+            elif task is None: yield module.parameters()
+
+    def train (self, task=None, mode=True):
+        for module in self.modules():
+            if isinstance(module, LoRALayer): module.train(task=task, mode=mode)
+            elif task is None: module.train(mode=mode)
+
+    def state_dict (model, task=None, prefix=""):
+        dict = {}
+
+        def df (module, task=None, prefix=""):
+            for name,child in module.named_children():
+                dict = {**dict, **df(child, task, prefix=f"{prefix}.{name}")}
+
+        if isinstance(model, LoRALayer):
+            dict = {**dict, **model.tasks[task].state_dict(prefix=f"{prefix}.{task}")}
+
+        return dict
+
+    def load_state_dict (model, task, state_dict, prefix=""):
+        for name,child in model.named_children():
+            load_state_dict(child, task, prefix=f"{prefix}.{name}")
+
+        if isinstance(model, LoRALayer):
+            module.tasks[task]._load_from_state_dict(state_dict=state_dict, prefix=f"{prefix}.{task}", local_metadata={}, strict=False, missing_keys=[], unexpected_keys=[], error_msgs=[])
