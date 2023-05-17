@@ -1,7 +1,6 @@
 import functools
 import torch
 
-from .convolution import *
 from .reshape import *
 
 class MultiHeadAttention (torch.nn.Module):
@@ -15,7 +14,7 @@ class MultiHeadAttention (torch.nn.Module):
     def __init__ (self, features, heads,
         dropout=1e-1
     ):
-        super(MultiHeadAttention, self).__init__()
+        torch.nn.Module.__init__(self)
 
         # validation
         assert features % heads == 0, "features needs to be divisible by heads"
@@ -61,18 +60,20 @@ class AttentionEncoder (torch.nn.Module):
     """
     general attention encoder
 
-    attention: attention mechanism module
+    features: number of features
     key: key input module
     query: query input module
     value: value input module
+    attention: attention mechanism module
+    output: output module
     activation: activation function                                             (optional|default: sigmoid)
     dropout: dropout rate                                                       (optional|default: 0.1)
     """
-    def __init__ (self, attention, features, key, query, value,
+    def __init__ (self, features, key, query, value, attention, output,
         activation=torch.nn.Sigmoid,
         dropout=1e-1
     ):
-        super(AttentionEncoder, self).__init__()
+        torch.nn.Module.__init__(self)
 
         # modules
         self.dropout = torch.nn.Dropout(dropout)
@@ -83,19 +84,16 @@ class AttentionEncoder (torch.nn.Module):
 
         self.attention = attention
 
-        self.linear = torch.nn.Linear(features, features)
+        self.output = output
         self.activation = activation() if activation is not None else None
 
-    def forward (self, key, query, value,
-        is_causal=False,
-        query_mask=None
-    ):
+    def forward (self, key, query, value):
         # attention
         attention = self.key(key), self.query(query), self.value(value)
-        attention = self.attention(*attention, is_causal=is_causal, query_mask=query_mask)
+        attention = self.attention(*attention)
 
         # output
-        output = self.linear(attention)
+        output = self.output(attention)
         output = self.activation(output)
 
         return output
