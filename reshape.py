@@ -7,9 +7,7 @@ class ReshapeSimple ():
     format: string format for reshaping
     inverse: string format for inverse reshaping                                (optional|default: format flipped)
     """
-    def __init__ (self, format,
-        inverse=None,
-    ):
+    def __init__ (self, format, inverse=None):
         # validation
         assert format.count(" -> ") == 1, "invalid einops string format"
 
