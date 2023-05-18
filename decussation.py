@@ -13,9 +13,10 @@ class Decussation (torch.nn.Module):
     def __init__ (self, model,
         criterion=torch.nn.MSELoss,
         dropout=3e-1,
-        loss_scale=1e-1
+        loss_scale=1e-1,
+        **kwargs
     ):
-        super(Decussation, self).__init__()
+        torch.nn.Module.__init__(self)
 
         # configs
         self.loss_scale = loss_scale
@@ -25,15 +26,17 @@ class Decussation (torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
         self.model = model
 
-    def forward (self, input):
+    def forward (self, *inputs,
+        **kwargs
+    ):
         # output
-        output = self.dropout(input)
-        output = self.model(output)
+        output = (self.dropout(input) for input in inputs)
+        output = self.model(*output, **kwargs)
 
         # decussation
         if self.training:
-            decussation = self.dropout(input)
-            decussation = self.model(decussation)
+            decussation = (self.dropout(input) for input in inputs)
+            decussation = self.model(*decussation, **kwargs)
 
             loss = self.criterion(decussation, output) * self.loss_scale
             loss.backward()
