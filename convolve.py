@@ -93,9 +93,6 @@ class ConvNdFeatureEncoder(torch.nn.Module):
                     padding=padding,
                     stride=stride))
             if normalization: 
-                print (normalization)
-                print (normalization(dims))
-                print (normalization(dims)(outChannels))
                 self.layers.append(normalization(dims)(outChannels))
             if activation: 
                 self.layers.append(activation())
